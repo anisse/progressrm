@@ -1,7 +1,9 @@
 use std::{
     collections::HashMap,
     fs,
+    io::Read,
     path::{Component, Path, PathBuf},
+    time::{Duration, SystemTime},
 };
 
 // Copy pasted from std so we don't have to rely on unstable feature:
@@ -135,7 +137,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     for pid in PidIterator::new("/usr/bin/rm")? {
         let cwd: PathBuf = fs::read_link(format!("/proc/{pid}/cwd"))?;
         // Parse cmdline
-        let cmdline: Vec<PathBuf> = fs::read_to_string(format!("/proc/{pid}/cmdline"))?
+        let mut cmdline_file = fs::File::open(format!("/proc/{pid}/cmdline"))?;
+        let mut cmdline_content = String::new();
+        _ = cmdline_file.read_to_string(&mut cmdline_content)?;
+        let cmdline: Vec<PathBuf> = cmdline_content
             .split_terminator('\0')
             .skip(1) // Skip command name
             .filter(|s| !s.starts_with("-")) // Normally this filter should not be effective after --; but this needs a stateful parser and we're still at PoC stage
@@ -147,6 +152,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             .enumerate()
             .map(|(i, el)| (el, i))
             .collect();
+        let time_since_start =
+            SystemTime::now().duration_since(cmdline_file.metadata()?.modified()?)?;
         let id = FdIterator::new(pid)?
             .filter_map(|filename| {
                 let mut components = filename.components();
@@ -163,12 +170,40 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             })
             .max()
             .expect("No open matching open file");
+        let args_per_second = *id as f32 / time_since_start.as_secs_f32();
+        let remaining_args = cmdline.len() - id;
         println!(
-            "[{pid}] rm in {}\n\t{:0.1}% ({id} / {} arguments)",
+            "[{pid}] rm in {}\n\
+            \t{:0.1}% ({id} / {} args) {:.1} args/h remaining {}",
             cwd.to_string_lossy(),
             *id as f32 * 100.0 / cmdline.len() as f32,
-            cmdline.len()
+            cmdline.len(),
+            args_per_second * 3600.0,
+            time_format_human(time_since_start.mul_f32(remaining_args as f32 / *id as f32)),
         );
     }
     Ok(())
+}
+
+fn time_format_human(d: Duration) -> String {
+    let mut out = String::new();
+    let mut secs = d.as_secs();
+    const MINUTE: u64 = 60;
+    const HOUR: u64 = MINUTE * 60;
+    const DAY: u64 = HOUR * 24;
+    if secs > DAY {
+        //needs days
+        let days = secs / DAY;
+        secs -= days * DAY;
+        out += &format!("{days} day");
+        if days > 1 {
+            out.push('s');
+        }
+    }
+    let hours = secs / HOUR;
+    secs -= hours * HOUR;
+    let minutes = secs / MINUTE;
+    secs -= minutes * MINUTE;
+    out += &format!(" {hours}:{minutes:02}:{secs:02}");
+    out
 }
