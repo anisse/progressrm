@@ -1,5 +1,5 @@
 use std::{
-    collections::{HashMap, HashSet},
+    collections::HashMap,
     fs,
     path::{Component, Path, PathBuf},
 };
@@ -137,7 +137,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         // Parse cmdline
         let cmdline: Vec<PathBuf> = fs::read_to_string(format!("/proc/{pid}/cmdline"))?
             .split_terminator('\0')
-            .filter(|s| !s.starts_with("--")) // Normally this filter should not be effective after --
+            .skip(1) // Skip command name
+            .filter(|s| !s.starts_with("-")) // Normally this filter should not be effective after --; but this needs a stateful parser and we're still at PoC stage
             .map(|s| normalize_lexically(&cwd.join(s)).expect("normalizable path"))
             .collect();
         let lookup_hash: HashMap<PathBuf, usize> = cmdline
@@ -146,22 +147,28 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             .enumerate()
             .map(|(i, el)| (el, i))
             .collect();
-        for filename in FdIterator::new(pid)? {
-            println!("{pid}: {filename:?}");
-            // Go up the tree until we find it
-            let mut components = filename.components();
-            loop {
-                let p = components.as_path().to_owned();
-                if let Some(i) = lookup_hash.get(&p) {
-                    println!("Progress: {i} / {}", cmdline.len());
-                    break;
+        let id = FdIterator::new(pid)?
+            .filter_map(|filename| {
+                let mut components = filename.components();
+                loop {
+                    let p = components.as_path().to_owned();
+                    if let Some(i) = lookup_hash.get(&p) {
+                        return Some(i);
+                    }
+                    if components.next_back().is_none() {
+                        break;
+                    }
                 }
-                let end = components.next_back();
-                if end.is_none() {
-                    break;
-                }
-            }
-        }
+                None
+            })
+            .max()
+            .expect("No open matching open file");
+        println!(
+            "[{pid}] rm in {}\n\t{:0.1}% ({id} / {} arguments)",
+            cwd.to_string_lossy(),
+            *id as f32 * 100.0 / cmdline.len() as f32,
+            cmdline.len()
+        );
     }
     Ok(())
 }
