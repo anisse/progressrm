@@ -3,7 +3,7 @@ use std::{
     fs,
     io::Read,
     path::{Component, Path, PathBuf},
-    time::{Duration, SystemTime},
+    time::Duration,
 };
 
 // Copy pasted from std so we don't have to rely on unstable feature:
@@ -152,8 +152,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             .enumerate()
             .map(|(i, el)| (el, i))
             .collect();
-        let time_since_start =
-            SystemTime::now().duration_since(cmdline_file.metadata()?.modified()?)?;
+        let time_since_start = process_time_since_start(pid)?;
         let id = FdIterator::new(pid)?
             .filter_map(|filename| {
                 let mut components = filename.components();
@@ -183,6 +182,33 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         );
     }
     Ok(())
+}
+
+fn process_time_since_start(pid: u32) -> Result<Duration, String> {
+    let pid_stat_name = format!("/proc/{pid}/stat");
+    let pid_stat = fs::read_to_string(&pid_stat_name)
+        .map_err(|e| format!("Cannot read {pid_stat_name}: {e}"))?;
+    let start_time_after_boot = pid_stat
+        .split_ascii_whitespace()
+        .nth(21)
+        .ok_or_else(|| format!("No starttime in {pid_stat_name}"))?
+        .parse::<u64>()
+        .map_err(|e| format!("starttime parse error: {e}"))?;
+    let process_start_time_after_boot = start_time_after_boot / system_ticks_per_second()?;
+    let time_since_boot_secs = nix::time::clock_gettime(nix::time::ClockId::CLOCK_BOOTTIME)
+        .map_err(|e| format!("cannot get time: {e}"))?
+        .tv_sec() as u64;
+    Ok(Duration::from_secs(
+        time_since_boot_secs - process_start_time_after_boot,
+    ))
+}
+
+fn system_ticks_per_second() -> Result<u64, String> {
+    nix::unistd::sysconf(nix::unistd::SysconfVar::CLK_TCK)
+        .map_err(|e| format!("Cannot get system clock ticks: {e}"))?
+        .ok_or_else(|| "empty clock tick".to_string())?
+        .try_into()
+        .map_err(|e| format!("negative clock ticks: {e}"))
 }
 
 fn time_format_human(d: Duration) -> String {
