@@ -1,10 +1,11 @@
 # progressrm
 
-View the progress of an rm command. Caveats:
+View the progress of an rm command in arguments processed per hour. Caveats:
 
  - this is still a PoC
  - the command must have lots of arguments, and probably be recursive, otherwise the algorithm and estimation won't work
  - if you need this, you probably are deleting on a hard disk and not an SSD
+ - Linux-only
 
 # Example usage
 ```
